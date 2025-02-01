@@ -18,6 +18,7 @@ MODULE_NAMES_DICT = {
     "reporting": reporting_funcs,
 }
 
+
 def load_funcs(config, module_name):
     # Define tasks
     tasks = {}

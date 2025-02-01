@@ -4,17 +4,18 @@ import pandas as pd
 import os
 import warnings
 from src.experiment_tracker.experiment_tracker_class import ExperimentTracker
-# NOTE: Reporter is different than the reported_sessions_csv. 
+
+
+# NOTE: Reporter is different than the reported_sessions_csv.
 # Reporter is the class that handles the reporting of sessions to wandb and local directories.
 # The reported_sessions_csv is a csv file that contains the sessions that have been processed for optimization.
 class Reporter:
     def __init__(self, reporting_config):
         self.config = reporting_config
-    
+
     def set_experiment_tracker(self, experiment_tracker: ExperimentTracker):
         """Set experiment tracker for accessing Ax visualization methods"""
-        self.experiment_tracker = experiment_tracker    
-
+        self.experiment_tracker = experiment_tracker
 
     def init_wandb(self, session_info: pl.DataFrame, path: str):
         # Add session and device relevant info to wandb_config for filtering in dashboard
@@ -43,8 +44,14 @@ class Reporter:
                 "session_info": wandb.Table(
                     dataframe=session_info.select(
                         pl.exclude("Data_Server_Hyperlink")
-                    # Polars to pandas conversion can mess up timezone info, so explicitly set it
-                    ).to_pandas().assign(TimeStarted=lambda df: pd.to_datetime(df['TimeStarted']).dt.tz_localize(self.config["TIMEZONE"]))
+                        # Polars to pandas conversion can mess up timezone info, so explicitly set it
+                    )
+                    .to_pandas()
+                    .assign(
+                        TimeStarted=lambda df: pd.to_datetime(
+                            df["TimeStarted"]
+                        ).dt.tz_localize(self.config["TIMEZONE"])
+                    )
                 )
             }
         )

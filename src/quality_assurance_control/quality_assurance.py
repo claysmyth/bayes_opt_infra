@@ -1,5 +1,6 @@
 import polars as pl
 
+
 def check_stim_settings(data: pl.DataFrame, expected_amplitude: float = 1.0) -> bool:
     """
     Check if stimulation settings match expected values.

@@ -12,20 +12,22 @@ class ExperimentTracker:
     def __init__(self, config: Dict[str, Any]):
         self.config = config
         self.experiment_id_column = config.get("experiment_id_column", "experiment_id")
-        
+
         # Load Ax client from file
         self.base_dir = Path(config["paths"]["base_dir"])
         self.experiment_name = config["experiment"]["name"]
         self.ax_client = self._load_ax_client()
-        
+
         # Load optimizer functions
-        assert config.get("optimizer_functions") is not None, "optimizer_functions must be defined"
+        assert (
+            config.get("optimizer_functions") is not None
+        ), "optimizer_functions must be defined"
         self._optimizer_funcs = load_funcs(config["optimizer_functions"], "bayes_opt")
         self._complete_and_get_trial = self._optimizer_funcs["complete_and_get_trial"]
-        
+
         self.experiments = {}  # Dict to store experiment metadata
         self.logger = get_run_logger()
-        
+
     def _load_ax_client(self) -> AxClient:
         """Load Ax client from JSON or database"""
         if self.config["experiment"].get("use_database", False):
@@ -55,7 +57,7 @@ class ExperimentTracker:
     #             'status': 'active'
     #         }
     #     return self.experiments[experiment_id]
-    
+
     # def add_session(self, experiment_id, participant_id, session_data):
     #     """Add a new session to the experiment/participant history"""
     #     experiment = self.get_or_create_experiment(experiment_id)
@@ -66,9 +68,9 @@ class ExperimentTracker:
     #             'optimization_history': [],
     #             'status': 'active'
     #         }
-        
+
     #     experiment['participants'][participant_id]['sessions'].append(session_data)
-        
+
     # def get_optimization_state(self, experiment_id, participant_id):
     #     """Get current optimization state for a participant"""
     #     return self.experiments[experiment_id]['participants'][participant_id]['optimization_history']
