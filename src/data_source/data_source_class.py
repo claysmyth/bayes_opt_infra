@@ -24,8 +24,8 @@ class DataSource:
         self._get_data_task = load_funcs(self.config["functions"], "data_source")
         self._get_data = self._get_data_task[self.func_name]
 
-    def get_data(self, session: pl.DataFrame) -> pl.DataFrame:
-        result = self._get_data(session)
+    def get_data(self, trial: pl.DataFrame) -> pl.DataFrame:
+        result = self._get_data(trial)
         if not isinstance(result, pl.DataFrame):
             warnings.warn(f"Expected polars DataFrame but got {type(result)}")
         return result

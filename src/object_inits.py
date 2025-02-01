@@ -2,7 +2,7 @@ from prefect import task, get_run_logger
 from src.data_source.data_source_class import DataSource
 from src.reporting.reporter_class import Reporter
 from src.quality_assurance_control.quality_ac_class import QualityAC
-from src.reward.reward_class import Reward
+from src.evaluation.evaluation_class import Evaluation
 from src.session_management.session_manager import SessionManager
 from src.experiment_tracker.experiment_tracker_class import ExperimentTracker
 
@@ -41,9 +41,9 @@ def init_quality_ac(config):
     logger.info(f"Initializing QualityAC with config: {config}")
     return QualityAC(config)
 
-# Reward acts to calculate the reward function from the session data.
-@task(name="init_reward")
-def init_reward(config):
+# evaluate acts to calculate the evaluate function from the session data.
+@task(name="init_evaluation")
+def init_evaluation(config):
     logger = get_run_logger()
-    logger.info(f"Initializing Reward with config: {config}")
-    return Reward(config)
+    logger.info(f"Initializing Evaluation with config: {config}")
+    return Evaluation(config)

@@ -3,13 +3,17 @@ import polars as pl
 import pandas as pd
 import os
 import warnings
-
+from src.experiment_tracker.experiment_tracker_class import ExperimentTracker
 # NOTE: Reporter is different than the reported_sessions_csv. 
 # Reporter is the class that handles the reporting of sessions to wandb and local directories.
 # The reported_sessions_csv is a csv file that contains the sessions that have been processed for optimization.
 class Reporter:
     def __init__(self, reporting_config):
         self.config = reporting_config
+    
+    def set_experiment_tracker(self, experiment_tracker: ExperimentTracker):
+        """Set experiment tracker for accessing Ax visualization methods"""
+        self.experiment_tracker = experiment_tracker    
 
 
     def init_wandb(self, session_info: pl.DataFrame, path: str):
