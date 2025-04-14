@@ -5,6 +5,7 @@ from src.quality_assurance_control.quality_ac_class import QualityAC
 from src.evaluation.evaluation_class import Evaluation
 from src.session_management.session_manager import SessionManager
 from src.experiment_tracker.experiment_tracker_class import ExperimentTracker
+from src.shipment.shipment_class import ParameterShipment
 
 
 # Session manager acts to parse tables that contain past and new sessions for analysis.
@@ -53,3 +54,11 @@ def init_evaluation(config):
     logger = get_run_logger()
     logger.info(f"Initializing Evaluation with config: {config}")
     return Evaluation(config)
+
+
+# evaluate acts to calculate the evaluate function from the session data.
+@task(name="init_parameter_shipment")
+def init_parameter_shipment(config):
+    logger = get_run_logger()
+    logger.info(f"Initializing ParameterShipment with config: {config}")
+    return ParameterShipment(config)

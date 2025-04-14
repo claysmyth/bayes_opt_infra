@@ -1,5 +1,6 @@
 .vscode/
 configs/
 notebooks/
+csvs/
 
 *.cpython*

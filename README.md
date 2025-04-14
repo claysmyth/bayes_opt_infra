@@ -7,10 +7,12 @@ It uses config files to initialize sub-pipeline objects, and then uses these obj
 
 The general workflow is as follows:
 
+0. Create an experiment folder in the base directory (can be done by running src/experiment_tracker/initialize_experiment.py from terminal). For RC+S experiments, it's recommended to also place your shipment template file in the experiment folder.
+
 1. Global config is loaded from a yaml file. This holds the configuration for all sub-pipeline objects and high-level file paths.
 
 2. Pipeline objects are initialized:
-   - Reporter: Manages visualizations and reports, handling both local files and W&B logging
+   - Reporter: Manages visualizations and reports, handling both local files and W&B logging. Much of the reporting functionality code is taken from claysmyth/sleep_aDBS_infra repository.
    - Experiment Tracker: Manages Bayes optimization experiments and parameter updates
    - Session Manager: Tracks reported/unreported sessions via Project CSV
    - Data Source: Retrieves session data from storage
@@ -30,7 +32,7 @@ The general workflow is as follows:
    h. Generate visualizations and reports
    i. Mark session as reported in session manager
 
-This pipeline relies heavily on the 'Ax' library, which abstracts much of the Bayesian Optimization process using Botorch: [text](https://ax.dev/versions/0.1.9/)
+This pipeline relies heavily on the 'Ax' library, which abstracts much of the Bayesian Optimization process using Botorch: [Ax](https://ax.dev/)
 
 The pipeline is designed to be:
 - Modular: Each component has a specific responsibility

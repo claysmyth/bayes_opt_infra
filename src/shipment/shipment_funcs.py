@@ -35,3 +35,42 @@ def ship_rcs_parameters(parameters: Dict[str, Any], config: Dict[str, Any]) -> s
 def ship_test_parameters(parameters: Dict[str, Any], config: Dict[str, Any]) -> str:
     """Example shipment function for testing."""
     return f"Parameters shipped: {parameters}"
+
+
+def update_json_config(filepath: str, update_dict: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Update JSON config file with new parameter values.
+
+    Args:
+        filepath: Path to JSON config file
+        update_dict: Dictionary of key-value pairs to update in the JSON. Keys can be nested using dot notation (e.g. 'field0.field1.field2')
+
+    Returns:
+        Updated JSON content as dictionary
+    """
+    import json
+
+    # Read existing JSON file
+    with open(filepath, "r") as f:
+        config = json.load(f)
+
+    # Update values
+    for key_path, value in update_dict.items():
+        # Split nested key path
+        keys = key_path.split(".")
+
+        # Navigate to the nested location
+        current = config
+        for key in keys[:-1]:
+            if key not in current:
+                current[key] = {}
+            current = current[key]
+
+        # Set the value at the final key
+        current[keys[-1]] = value
+
+    # Write back to file
+    with open(filepath, "w") as f:
+        json.dump(config, f, indent=4)
+
+    return config

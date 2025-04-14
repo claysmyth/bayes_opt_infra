@@ -16,7 +16,7 @@ def load_config(config_path: str) -> dict:
         return yaml.safe_load(f)
 
 
-def default_ax(config: dict) -> AxClient:
+def default_ax_setup(config: dict) -> AxClient:
     """Initialize default Ax experiment with configuration."""
     # Extract parameters from config
     base_dir = Path(config["paths"]["base_dir"])
@@ -61,18 +61,15 @@ def default_ax(config: dict) -> AxClient:
             obj["name"]: ObjectiveProperties(minimize=obj.get("minimize", True))
             for obj in config["objectives"]
         },
-        choose_generation_strategy_kwargs={
-            "num_initialization_trials": config["experiment"].get(
-                "num_initialization_trials", 5
-            )
-        },
+        choose_generation_strategy_kwargs=config.get(
+            "choose_generation_strategy_kwargs", {}
+        ),
     )
 
     # Save ax_client to JSON
     json_path = base_dir / f"{experiment_name}.json"
     ax_client.save_to_json_file(
         filepath=str(json_path),
-        save_generation_strategy=True,  # Ensure full model state is saved
     )
 
     return ax_client
@@ -85,13 +82,12 @@ def main():
 
     # Load config and initialize experiment
     config = load_config(args.config_path)
-    ax_client = default_ax(config)
+    ax_client = default_ax_setup(config)
 
     # Save initial state to JSON (optional)
     if config["experiment"].get("save_json", True):
         json_path = (
-            Path(config["paths"]["base_dir"])
-            / f"{config['experiment']['name']}_initial.json"
+            Path(config["paths"]["base_dir"]) / f"{config['experiment']['name']}.json"
         )
         ax_client.save_to_json_file(filepath=str(json_path))
 
@@ -99,5 +95,5 @@ def main():
 
 
 if __name__ == "__main__":
-    # Run with python initialize_experiment.py [filepath to config yaml. See template in configs/experiment_initialization_config]
+    # Run with python initialize_experiment.py [filepath to config yaml. See template in configs/ax_experiment_init_config/experiment_initialization_config.yaml]
     main()
