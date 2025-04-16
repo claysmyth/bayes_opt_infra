@@ -75,27 +75,19 @@ def bayes_opt_main_pipeline(cfg: DictConfig):
                 # Evaluation Function (calculate evaluation function from data)
                 result = evaluation.evaluate(session_data)
 
-                # Visualize the data and log to relevant dashboards (e.g. WandB, prefect, and local)
-                # TODO: Define analyses... or ingore if analyses should belong to sleep_aDBS_infra
-                path = reporter.run(session_data, analyses, participant)
-
-                # Update Bayesian Optimizer with new settings
-                experiment_tracker.update_optimizer(result)
-                parameters_to_try = experiment_tracker.get_parameters_to_try()
-
-                # Generate final format of new parameters and ship to relevant destination
-                # (e.g. generate new RC+S adaptive config file from parameters, and send to device)
-                experiment_tracker.save_parameters(parameters_to_try)
-                shipped_file = parameter_shipment.ship_parameters_to_destination(
-                    parameters_to_try
+                # Update Bayesian Optimizer with results and get next parameters
+                next_trial = experiment_tracker.update_optimizer(result)
+                
+                # Ship new parameters to destination
+                # Ship new parameters to destination
+                shipped_files = parameter_shipment.ship_parameters(
+                    experiment_tracker=experiment_tracker,
+                    parameters=next_trial["parameters"],
+                    config=config["shipment_config"]
                 )
 
-                # Save and visualize new settings and Bayes Opt updates. Save file sent to device
-                # ? Save through experiment tracker or reporter?
-                # TODO: How to save everything??
-
-                # Add session to reported sessions csv
-                session_manager.update_reported_sessions(session)
+                # Save session to reported sessions csv
+                session_manager.update_reported_sessions(participant)
 
 
 @hydra.main(

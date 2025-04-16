@@ -12,11 +12,17 @@ class ExperimentTracker:
     def __init__(self, config: Dict[str, Any]):
         self.config = config
         self.experiment_id_column = config.get("experiment_id_column", "experiment_id")
-
-        # Load Ax client from file
+        
+        # Base directory for all experiments
         self.base_dir = Path(config["paths"]["base_dir"])
         self.experiment_name = config["experiment"]["name"]
-        self.ax_client = self._load_ax_client()
+        
+        # Store current context
+        self.current_participant_id = None
+        self.current_experiment_id = None
+        self.ax_client = None
+        self.current_trial_index = None  # Add this to track current trial
+        self.current_parameters = None   # Add this to track current parameters
 
         # Load optimizer functions
         assert (
@@ -24,53 +30,124 @@ class ExperimentTracker:
         ), "optimizer_functions must be defined"
         self._optimizer_funcs = load_funcs(config["optimizer_functions"], "bayes_opt")
         self._complete_and_get_trial = self._optimizer_funcs["complete_and_get_trial"]
+        
+        # Load context update functions
+        assert (
+            config.get("context_update_functions") is not None
+        ), "context_update_functions must be defined"
+        self._context_funcs = load_funcs(config["context_update_functions"], "context_update")
+        self._update_context_internal = self._context_funcs[config["context_update_functions"]["function"]]
 
-        self.experiments = {}  # Dict to store experiment metadata
         self.logger = get_run_logger()
 
-    def _load_ax_client(self) -> AxClient:
-        """Load Ax client from JSON or database"""
+    def _get_participant_json_path(self, participant_id: str) -> Path:
+        """Get the JSON file path for a specific participant."""
+        return self.base_dir / participant_id / f"{self.experiment_name}.json"
+
+    def update_context(self, participant: Dict[str, Any], experiment_id: str) -> None:
+        """
+        Public method to update experimental context.
+        Calls the configured context update function.
+        """
+        self._update_context_internal(self, participant, experiment_id)
+
+    def _default_update_context(self, participant: Dict[str, Any], experiment_id: str) -> None:
+        """Default implementation of context update."""
+        participant_id = participant[self.experiment_id_column]
+        
+        # If we're already working with this participant, no need to reload
+        if participant_id == self.current_participant_id:
+            return
+            
+        # Update current context
+        self.current_participant_id = participant_id
+        self.current_experiment_id = experiment_id
+        
+        # Load participant-specific Ax client
+        self.ax_client = self._load_ax_client(participant_id)
+
+    def _load_ax_client(self, participant_id: str) -> AxClient:
+        """Load Ax client from JSON or database for a specific participant."""
         if self.config["experiment"].get("use_database", False):
-            db_path = self.base_dir / f"{self.experiment_name}.db"
+            db_path = self.base_dir / participant_id / f"{self.experiment_name}.db"
             if not db_path.exists():
-                raise FileNotFoundError(f"Database not found at {db_path}")
-            # Load from database
+                raise FileNotFoundError(
+                    f"Database not found at {db_path}. "
+                    "Please initialize experiment using initialize_experiment.py"
+                )
             return AxClient(db_settings=DBSettings(url=f"sqlite:///{db_path}"))
         else:
-            json_path = self.base_dir / f"{self.experiment_name}.json"
+            json_path = self._get_participant_json_path(participant_id)
             if not json_path.exists():
-                raise FileNotFoundError(f"JSON file not found at {json_path}")
-            # Load from JSON
+                raise FileNotFoundError(
+                    f"JSON file not found at {json_path}. "
+                    "Please initialize experiment using initialize_experiment.py"
+                )
             return AxClient.load_from_json_file(filepath=str(json_path))
 
+    def save_current_state(self) -> None:
+        """Save the current state of the Ax client."""
+        if self.ax_client is not None and self.current_participant_id is not None:
+            json_path = self._get_participant_json_path(self.current_participant_id)
+            json_path.parent.mkdir(parents=True, exist_ok=True)
+            self.ax_client.save_to_json_file(filepath=str(json_path))
+
+    def get_next_trial(self) -> Dict[str, Any]:
+        """
+        Get parameters for the next trial.
+        
+        Returns
+        -------
+        Dict[str, Any]
+            Dictionary containing 'parameters' and 'trial_index'
+        """
+        if self.ax_client is None:
+            raise RuntimeError("No active Ax client. Call update_context first.")
+        
+        parameters, trial_index = self.ax_client.get_next_trial()
+        
+        # Store current trial info
+        self.current_trial_index = trial_index
+        self.current_parameters = parameters
+        
+        # Save state after getting new trial
+        self.save_current_state()
+        
+        return {
+            "parameters": parameters,
+            "trial_index": trial_index
+        }
+
     def update_optimizer(self, evaluation_result: Dict[str, float]) -> Dict[str, Any]:
-        """Update optimizer with evaluation results and get next parameters"""
-        return self._complete_and_get_trial(self, evaluation_result)
-
-    # def get_or_create_experiment(self, experiment_id):
-    #     """Get or create an experiment instance"""
-    #     if experiment_id not in self.experiments:
-    #         self.experiments[experiment_id] = {
-    #             'participants': {},
-    #             'metadata': {},
-    #             'creation_date': datetime.now(),
-    #             'status': 'active'
-    #         }
-    #     return self.experiments[experiment_id]
-
-    # def add_session(self, experiment_id, participant_id, session_data):
-    #     """Add a new session to the experiment/participant history"""
-    #     experiment = self.get_or_create_experiment(experiment_id)
-    #     if participant_id not in experiment['participants']:
-    #         experiment['participants'][participant_id] = {
-    #             'sessions': [],
-    #             'current_parameters': None,
-    #             'optimization_history': [],
-    #             'status': 'active'
-    #         }
-
-    #     experiment['participants'][participant_id]['sessions'].append(session_data)
-
-    # def get_optimization_state(self, experiment_id, participant_id):
-    #     """Get current optimization state for a participant"""
-    #     return self.experiments[experiment_id]['participants'][participant_id]['optimization_history']
+        """
+        Complete current trial with results and get parameters for next trial.
+        
+        Parameters
+        ----------
+        evaluation_result : Dict[str, float]
+            Dictionary containing the evaluation metrics
+            
+        Returns
+        -------
+        Dict[str, Any]
+            Dictionary containing parameters for next trial
+        """
+        if self.ax_client is None:
+            raise RuntimeError("No active Ax client. Call update_context first.")
+        
+        if self.current_trial_index is None:
+            raise RuntimeError("No active trial. Call get_next_trial first.")
+        
+        # Complete the current trial
+        self.ax_client.complete_trial(
+            trial_index=self.current_trial_index,
+            raw_data=evaluation_result
+        )
+        
+        # Save state after completing trial
+        self.save_current_state()
+        
+        # Get parameters for next trial (this also saves state)
+        next_trial = self.get_next_trial()
+        
+        return next_trial

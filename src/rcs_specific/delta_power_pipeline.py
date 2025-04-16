@@ -12,10 +12,10 @@ The script creates individual session plots and an overlay plot showing:
 
 Example usage:
     # Basic usage with default config:
-    python src/rcs_specific/delta_power_pipeline.py RCS09L RCS09R
+    python src/rcs_specific/delta_power_pipeline.py DEVICEIDL DEVICEIDR
     
     # With custom config and duration:
-    python src/rcs_specific/delta_power_pipeline.py RCS09L RCS09R \
+    python src/rcs_specific/delta_power_pipeline.py DEVICEIDL DEVICEIDR \
         --config configs/rcs_configs/baseline_delta_reward.yaml \
         --duration 12.0
 """

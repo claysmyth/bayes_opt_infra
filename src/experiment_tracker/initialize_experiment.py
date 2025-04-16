@@ -47,16 +47,17 @@ def default_ax_setup(config: dict) -> AxClient:
     # Create experiment
     ax_client.create_experiment(
         name=experiment_name,
-        parameters=[
-            {
-                "name": param["name"],
-                "type": param["type"],
-                "bounds": param["bounds"],
-                "value_type": param.get("value_type", "float"),
-                "log_scale": param.get("log_scale", False),
-            }
-            for param in config["parameters"]
-        ],
+        # parameters=[
+        #     {
+        #         "name": param["name"],
+        #         "type": param["type"],
+        #         "bounds": param["bounds"],
+        #         "value_type": param.get("value_type", "float"),
+        #         "log_scale": param.get("log_scale", False),
+        #     }
+        #     for param in config["parameters"]
+        # ],
+        parameters=config["parameters"],
         objectives={
             obj["name"]: ObjectiveProperties(minimize=obj.get("minimize", True))
             for obj in config["objectives"]

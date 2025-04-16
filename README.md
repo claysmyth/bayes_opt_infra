@@ -1,5 +1,5 @@
 # bayes_opt_infra
-Infrastructure to run bayesian optimization on neural data.
+Infrastructure to run bayesian optimization on neural data. (WORK IN PROGRESS)
 
 This project uses Bayesian Optimization to determine neural stimulation parameters for participants to optimize some clinically or scientifically relevant outcome. It draws on data from a local server. 
 
