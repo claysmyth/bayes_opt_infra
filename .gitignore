@@ -2,5 +2,10 @@
 configs/
 notebooks/
 csvs/
+.env
+outputs/
+wandb/
+analysis_for_hanna/
+.wandb/
 
 *.cpython*

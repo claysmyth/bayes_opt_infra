@@ -1,142 +1,156 @@
 import os
-from .file_utils import (
-    create_zip,
-    get_git_info,
-    save_conda_package_versions,
-)
-import altair, plotly, matplotlib, seaborn, wandb
-from prefect import get_run_logger
-from prefect.artifacts import create_markdown_artifact
 import polars as pl
+from typing import Dict, Any, Optional
+from pathlib import Path
+import wandb
+import json
+import tempfile
+import shutil
+# from src.experiment_tracker.experiment_tracker_class import ExperimentTracker
 
+def init_local_reporting_rcs(
+    participant_sessions: pl.DataFrame,
+    experiment_tracker: 'ExperimentTracker',  # Use string literal to avoid circular import
+    reporting_path_base: str = None
+) :
+    """
+    Initialize local reporting for RCS data with trial-specific paths.
+    
+    Parameters
+    ----------
+    participant_sessions : pl.DataFrame
+        DataFrame containing participant session information
+    experiment_tracker : ExperimentTracker
+        Experiment tracker object to get current trial index
+    reporting_path_base : str
+        Base path for reporting
+        
+    Returns
+    -------
+    Optional[str]
+        Path to trial-specific reporting directory if created, None otherwise
+    """
+    try:
+        # Get unique participant from RCS# column
+        participant = participant_sessions.get_column("RCS#").unique().to_list()[0]
+        
+        # Get current trial index from experiment tracker
+        trial_index = experiment_tracker.get_trial_index()
+        
+        # Format reporting path with participant and trial
+        reporting_path = Path(reporting_path_base.format(participant=participant))
+        trial_path = reporting_path / str(trial_index)
+        
+        # Create trial directory if it doesn't exist
+        if not trial_path.exists():
+            trial_path.mkdir(parents=True, exist_ok=True)
+            
+        return str(trial_path)
+        
+    except Exception as e:
+        print(f"Error initializing local reporting: {e}")
+        return None
+    
+    
+def log_rcs_shipment(
+    shipped_files: Dict[str, Any],
+    experiment_tracker: 'ExperimentTracker',
+    local_path: Optional[str] = None
+) -> None:
+    """
+    Log RCS shipped files for each trial to corresponding local trial directory for saving.
 
-def local_setup(path, config, conda=False):
+    Parameters
+    ----------
+    shipped_files : Dict[str, Any]
+        Dictionary containing shipped files information
+    """
+    files_to_save_to_local = []
+    adaptive_config_paths = shipped_files['ship_rcs_adaptive_configs_to_device']
+    for key, path in adaptive_config_paths.items():
+        files_to_save_to_local.append(path)
 
-    # Save code, git info, and config file to run directory
-    create_zip(
-        f"{os.getcwd()}/python",
-        f"{path}/code.zip",
-        exclude=config["code_snapshot_exclude"],
-    )
-    if (
-        conda
-    ):  # Don't save conda package versions, because we are trying to run from non-conda terminal.
-        save_conda_package_versions(path)
-    git_info = get_git_info()
-    # Write git info to a text file
-    git_info_path = os.path.join(path, "git_info.txt")
-    with open(git_info_path, "w") as f:
-        for key, value in git_info.items():
-            f.write(f"{key}: {value}\n")
+    files_to_save_to_local.append(shipped_files['update_current_target_amp_cache']['cache_path'])
 
+    # Copy files to local path
+    for file_path in files_to_save_to_local:
+        shutil.copy(file_path, os.path.join(local_path, os.path.basename(file_path)))
 
-def log_plotting_result(result, func_name, log_options, wandb_run=None, path=None):
+    # Save experiment tracker to local path
+    experiment_tracker.save_experiment_to_json_file(os.path.join(local_path, 'experiment_snapshot.json'))
+    
 
-    logger = get_run_logger()
-
-    logging_actions = {
-        altair.Chart: _log_html_plot,
-        plotly.graph_objs.Figure: _log_plotly_plot,
-        # wandb.plot.line: _log_wandb_line,
-        (matplotlib.figure.Figure, seaborn.axisgrid.FacetGrid): _log_image_plot,
-        wandb.Table: _log_wandb_table,
-        dict: _log_dict,
-        pl.DataFrame: _log_polars_table,
-        # (tuple, list): _log_many, # For logging multiple plots, each one likely a dict for wandb
-    }
-
-    for types, action in logging_actions.items():
-        if isinstance(result, types):
-            action(result, func_name, log_options, wandb_run, path)
-            return
-
-    if isinstance(result, str) and result.startswith("<!DOCTYPE html>"):
-        _log_html_string(result, func_name, log_options, wandb_run, path)
-    else:
-        logger.warning(f"Unsupported result type for {func_name}: {type(result)}")
-
-
-# Helper functions for logging different types of results
-def _log_html_plot(result, func_name, log_options, wandb_run, path):
-    html_path = os.path.join(path, f"{func_name}.html")
-    result.save(html_path)
-    table = wandb.Table(columns=["Altair Plot"])
-    table.add_data(wandb.Html(html_path))
-    _log_to_wandb(wandb_run, func_name, table, log_options)
-
-
-def _log_plotly_plot(result, func_name, log_options, wandb_run, path):
-    _log_to_wandb(wandb_run, func_name, result, log_options)
-    file_path = _log_to_file(path, func_name, result.to_html(), ".html", log_options)
-
-
-def _log_wandb_line(result, func_name, log_options, wandb_run, path):
-    _log_to_wandb(wandb_run, func_name, result, log_options)
-
-
-def _log_image_plot(result, func_name, log_options, wandb_run, path):
-    file_path = _log_to_file(
-        path, func_name, result, ".png", log_options, save_func=result.savefig
-    )
-    _log_to_wandb(wandb_run, func_name, wandb.Image(result), log_options)
-
-
-def _log_wandb_table(result, func_name, log_options, wandb_run, path):
-    file_path = _log_to_file(
-        path, func_name, result, ".csv", log_options, save_func=result.to_csv
-    )
-    _log_to_wandb(wandb_run, func_name, result, log_options)
-
-
-def _log_html_string(result, func_name, log_options, wandb_run, path):
-    file_path = _log_to_file(path, func_name, result, ".html", log_options)
-    _log_to_wandb(wandb_run, func_name, wandb.Html(result), log_options)
-
-
-def _log_to_wandb(wandb_run, func_name, content, log_options):
-    if "WandB" in log_options and wandb_run:
-        wandb_run.log({func_name: content})
-
-
-def _log_dict(result, func_name, log_options, wandb_run, path):
-    if "WandB" in log_options and wandb_run:
-        if len(result) == 1:
-            wandb_run.log(result)
-        else:
-            {wandb_run.log({key: value}) for key, value in result.items()}
-    if "file" in log_options and path:
-        file_path = os.path.join(path, f"{func_name}.json")
-        with open(file_path, "w") as f:
-            f.write(result)
-
-
-def _log_polars_table(result, func_name, log_options, wandb_run, path):
-    if "WandB" in log_options and wandb_run:
-        wandb_run.log({func_name: result.to_pandas()})
-    if "file" in log_options and path:
-        _log_to_file(
-            path,
-            func_name,
-            result,
-            ".parquet",
-            log_options,
-            save_func=result.write_parquet,
+def init_wandb_rcs(
+    participant_sessions: pl.DataFrame,
+    experiment_tracker: 'ExperimentTracker',  # Use string literal to avoid circular import
+    wandb_config: Dict[str, Any],
+    local_path: Optional[str] = None
+):
+    """
+    Initialize Weights & Biases for RCS data with trial-specific information.
+    
+    Parameters
+    ----------
+    participant_sessions : pl.DataFrame
+        DataFrame containing participant session information
+    experiment_tracker : ExperimentTracker
+        Experiment tracker object to get current trial information
+    wandb_config : Dict[str, Any]
+        Configuration dictionary for Weights & Biases
+    local_path : Optional[str]
+        Path to local reporting directory
+        
+    Returns
+    -------
+    Optional[wandb.Run]
+        Initialized Weights & Biases run if successful, None otherwise
+    """
+    try:
+        # Get current trial information
+        current_trial = experiment_tracker.get_current_trial()
+        trial_index = current_trial.get("index", 0)
+        
+        # Add session and device relevant info to wandb_config
+        wandb_config["tags"] = participant_sessions.get_column("Session#").unique().to_list()
+        wandb_config["job_type"] = participant_sessions.get_column("RCS#").unique().to_list()[0]
+        wandb_config["group"] = participant_sessions.get_column("SessionType(s)").unique().to_list()[0]
+        
+        # Add trial information to config
+        wandb_config["trial_index"] = trial_index
+        wandb_config["trial_parameters"] = current_trial.get("parameters", {})
+        wandb_config["local_results_path"] = local_path
+        
+        # Initialize wandb
+        run = wandb.init(
+            project=wandb_config["project"],
+            entity=wandb_config["entity"],
+            job_type=wandb_config["job_type"],
+            group=wandb_config["group"],
+            tags=wandb_config["tags"],
         )
-
-
-def _log_to_file(path, func_name, content, extension, log_options, save_func=None):
-    if ("file" in log_options) and path:
-        file_path = os.path.join(path, f"{func_name}{extension}")
-        if save_func:
-            save_func(file_path)
-        else:
-            with open(file_path, "w") as f:
-                f.write(content)
-        if "prefect" in log_options:
-            create_markdown_artifact(
-                key=f"{func_name}_{'plot' if extension in ['.html', '.png'] else 'table'}",
-                markdown=f"{'Plot' if extension in ['.html', '.png'] else 'Table'} saved as {extension[1:].upper()}: {file_path}",
-                description=f"{extension[1:].upper()} {'plot' if extension in ['.html', '.png'] else 'table'} for {func_name}",
-            )
-        return file_path
-    return None
+        
+        # Log wandb_config as an artifact instead of config
+        config_artifact = wandb.Artifact(
+            name=f"trial_config_{trial_index}", 
+            type="config"
+        )
+        
+        # Create a temporary file to store the config
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False) as f:
+            json.dump(wandb_config, f, indent=2)
+            config_path = f.name
+        
+        # Add the config file to the artifact
+        config_artifact.add_file(config_path)
+        
+        # Log the artifact
+        run.log_artifact(config_artifact)
+        
+        # Clean up the temporary file
+        os.remove(config_path)
+        
+        return run
+        
+    except Exception as e:
+        print(f"Error initializing Weights & Biases: {e}")
+        return None

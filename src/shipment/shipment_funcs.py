@@ -2,8 +2,8 @@ from prefect import task
 from typing import Dict, Any, Optional, Union
 from pathlib import Path
 import json
-import shutil
-
+import bidict
+import polars as pl
 
 def _load_template(template_path: Path) -> Dict[str, Any]:
     """Load JSON template file."""
@@ -43,157 +43,125 @@ def _map_parameters_to_template(
     return updated_template
 
 
-@task(name="ship_parameters")
-def ship_parameters(
-    experiment_tracker,
-    parameters: Dict[str, Any],
-    config: Dict[str, Any]
-) -> Union[Dict[str, str], str]:
+def ship_rcs_adaptive_configs_to_device(parameters: Dict[str, Any], participant_info: pl.DataFrame, **config) -> Dict[str, Any]:
     """
-    Ship parameters based on experiment tracker's stimulation mode.
+    Ship RCS adaptive configs to the device by updating templates with new parameters.
     
-    Args:
-        experiment_tracker: ExperimentTracker instance
-        parameters: Dictionary of parameters from Bayesian optimization
-        config: Configuration dictionary with paths and settings
+    Parameters
+    ----------
+    parameters : Dict[str, Any]
+        Dictionary containing the parameters to ship
+    participant_info : pl.DataFrame
+        DataFrame containing participant information
+    config : Dict[str, Any]
+        Configuration containing:
+        - shipment_destination_path: str (path template with {participant})
+        - adaptive_config_templates: Dict[str, str] (path templates with {participant} and {device})
+        - parameter_field_in_template: str (field path with {NREMState})
+        - nrem_state_on_device: str (path template with {participant} and {device})
+    
+    Returns
+    -------
+    Dict[str, Any]
+        Dictionary containing the paths of the shipped files
+    """
+    shipped_files = {}
+    participant = participant_info.select("RCS#").unique().item()
+
+    # Process each side (Left/Right)
+    for side, template_path in config["adaptive_config_templates"].items():
+
+        # Skip if side not in parameters, e.g. unilateral participants
+        if side not in parameters.keys():
+            continue
+
+        # Get device ID (participant + first letter of side)
+        device = participant + side[0]
         
-    Returns:
-        Union[Dict[str, str], str]: Path(s) to created config file(s)
-    """
-    stimulation_mode = experiment_tracker.get_stimulation_mode()
-    participant_id = experiment_tracker.current_participant_id
-    
-    if stimulation_mode == "bilateral":
-        return _ship_bilateral_parameters(
+        # Load template
+        template = _load_template(Path(template_path.format(
+            participant=participant,
+            device=device
+        )))
+
+        nrem_state_mapping = _load_template(Path(config["nrem_state_on_device"].format(
+            participant=participant,
+            device=device
+        )))
+
+        if "NREM" not in list(nrem_state_mapping.keys()):
+            nrem_state_mapping = bidict.bidict(nrem_state_mapping).inverse
+            assert "NREM" in list(nrem_state_mapping.keys()), "NREM state not found in nrem_state_mapping"
+        
+        # Create parameter mapping for this side
+        parameter_mapping = {}
+        field_path = config["parameter_field_in_template"].format(NREMState=nrem_state_mapping["NREM"]).replace(" ", "")
+        parameter_mapping[side] = field_path
+        
+        # Update template with parameters
+        updated_template = _map_parameters_to_template(
+            template=template,
             parameters=parameters,
-            config=config,
-            participant_id=participant_id
+            parameter_mapping=parameter_mapping
         )
+        
+        # Write updated template to destination
+        destination_path = Path(config["shipment_destination_path"].format(
+            participant=participant
+        )) / f"adaptive_config_{side[0]}.json"
+        
+        # Ensure destination directory exists
+        destination_path.parent.mkdir(parents=True, exist_ok=True)
+        
+        # Write updated template
+        with open(destination_path, 'w') as f:
+            json.dump(updated_template, f, indent=4)
+        
+        shipped_files[side] = str(destination_path)
+    
+    return shipped_files
+
+
+def update_current_target_amp_cache(parameters: Dict[str, Any], participant_info: pl.DataFrame, **config) -> Dict[str, Any]:
+    """
+    Update the current target amp cache on the device.
+    
+    Parameters
+    ----------
+    parameters : Dict[str, Any]
+        Dictionary containing the parameters to ship
+    config : Dict[str, Any]
+        Configuration containing:
+        - cache_path: str (path template with {participant})
+        - cache_field: str (field in cache to update)
+    
+    Returns
+    -------
+    """
+    participant = participant_info.select("RCS#").unique().item()
+    
+    # Format the cache path with the device ID
+    cache_path = Path(config["cache_path"].format(participant=participant))
+    
+    # Ensure the directory exists
+    cache_path.parent.mkdir(parents=True, exist_ok=True)
+    
+    # Check if cache file exists, if so load it, otherwise create new
+    if cache_path.exists():
+        try:
+            with open(cache_path, 'r') as f:
+                cache_data = json.load(f)
+        except json.JSONDecodeError:
+            # Handle case where file exists but is not valid JSON
+            cache_data = {}
     else:
-        # For unilateral, get the side from the experiment config
-        side = experiment_tracker.config["experiment"].get("stimulation_side", "L")
-        return _ship_unilateral_parameters(
-            parameters=parameters,
-            config=config,
-            participant_id=participant_id,
-            side=side
-        )
-
-
-def _ship_bilateral_parameters(
-    parameters: Dict[str, Any],
-    config: Dict[str, Any],
-    participant_id: str
-) -> Dict[str, str]:
-    """Internal function to ship bilateral parameters."""
-    # Get template paths
-    template_dir = Path(config["paths"]["template_dir"])
-    left_template_path = template_dir / participant_id / "adaptive_config_L.json"
-    right_template_path = template_dir / participant_id / "adaptive_config_R.json"
+        cache_data = {}
     
-    # Load templates
-    left_template = _load_template(left_template_path)
-    right_template = _load_template(right_template_path)
+    # Update cache with parameters
+    cache_data.update(parameters)
     
-    # Get parameter mappings
-    left_mapping = config["parameter_mappings"]["left"]
-    right_mapping = config["parameter_mappings"]["right"]
+    # Write updated cache to file
+    with open(cache_path, 'w') as f:
+        json.dump(cache_data, f, indent=4)
     
-    # Update templates
-    updated_left = _map_parameters_to_template(left_template, parameters, left_mapping)
-    updated_right = _map_parameters_to_template(right_template, parameters, right_mapping)
-    
-    # Create output directory
-    output_dir = Path(config["paths"]["output_dir"]) / participant_id / f"trial_{parameters['trial_index']}"
-    output_dir.mkdir(parents=True, exist_ok=True)
-    
-    # Save updated configs
-    left_output = output_dir / "adaptive_config_L.json"
-    right_output = output_dir / "adaptive_config_R.json"
-    
-    with open(left_output, 'w') as f:
-        json.dump(updated_left, f, indent=4)
-    with open(right_output, 'w') as f:
-        json.dump(updated_right, f, indent=4)
-    
-    return {
-        "Left": str(left_output),
-        "Right": str(right_output)
-    }
-
-
-def _ship_unilateral_parameters(
-    parameters: Dict[str, Any],
-    config: Dict[str, Any],
-    participant_id: str,
-    side: str
-) -> str:
-    """Internal function to ship unilateral parameters."""
-    # Get template path
-    template_dir = Path(config["paths"]["template_dir"])
-    template_path = template_dir / participant_id / f"adaptive_config_{side}.json"
-    
-    # Load template
-    template = _load_template(template_path)
-    
-    # Get parameter mapping
-    mapping = config["parameter_mappings"][side.lower()]
-    
-    # Update template
-    updated_template = _map_parameters_to_template(template, parameters, mapping)
-    
-    # Create output directory
-    output_dir = Path(config["paths"]["output_dir"]) / participant_id / f"trial_{parameters['trial_index']}"
-    output_dir.mkdir(parents=True, exist_ok=True)
-    
-    # Save updated config
-    output_path = output_dir / f"adaptive_config_{side}.json"
-    with open(output_path, 'w') as f:
-        json.dump(updated_template, f, indent=4)
-    
-    return str(output_path)
-
-
-@task(name="ship_test_parameters")
-def ship_test_parameters(parameters: Dict[str, Any], config: Dict[str, Any]) -> str:
-    """Example shipment function for testing."""
-    return f"Parameters shipped: {parameters}"
-
-
-def update_json_config(filepath: str, update_dict: Dict[str, Any]) -> Dict[str, Any]:
-    """
-    Update JSON config file with new parameter values.
-
-    Args:
-        filepath: Path to JSON config file
-        update_dict: Dictionary of key-value pairs to update in the JSON. Keys can be nested using dot notation (e.g. 'field0.field1.field2')
-
-    Returns:
-        Updated JSON content as dictionary
-    """
-    import json
-
-    # Read existing JSON file
-    with open(filepath, "r") as f:
-        config = json.load(f)
-
-    # Update values
-    for key_path, value in update_dict.items():
-        # Split nested key path
-        keys = key_path.split(".")
-
-        # Navigate to the nested location
-        current = config
-        for key in keys[:-1]:
-            if key not in current:
-                current[key] = {}
-            current = current[key]
-
-        # Set the value at the final key
-        current[keys[-1]] = value
-
-    # Write back to file
-    with open(filepath, "w") as f:
-        json.dump(config, f, indent=4)
-
-    return config
+    return {"cache_path": str(cache_path)}

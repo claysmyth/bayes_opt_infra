@@ -1,7 +1,9 @@
 from src.utils import load_funcs
 import polars as pl
 import warnings
+import json
 from typing import Dict, Optional
+from pathlib import Path
 
 
 class QualityAC:
@@ -21,14 +23,14 @@ class QualityAC:
         # Initialize QA checks
         self.qa_funcs = {}
         if self.config.get("qa_functions"):
-            self.qa_funcs = load_funcs(self.config["qa_functions"], "quality_assurance")
+            self.qa_funcs = load_funcs(self.config["qa_functions"], "quality_assurance", return_type="dict")
 
         # Initialize QC checks
         self.qc_funcs = {}
         if self.config.get("qc_functions"):
-            self.qc_funcs = load_funcs(self.config["qc_functions"], "quality_control")
+            self.qc_funcs = load_funcs(self.config["qc_functions"], "quality_control", return_type="dict")
 
-    def quality_assurance_check(self, session_data: pl.DataFrame) -> Optional[bool]:
+    def quality_assurance_check(self, session_data: pl.DataFrame, sessions_df: pl.DataFrame) -> Optional[bool]:
         """
         Run all configured quality assurance checks on the session data.
         Returns:
@@ -41,7 +43,8 @@ class QualityAC:
 
         for func_name, qa_func in self.qa_funcs.items():
             try:
-                check_failed = qa_func(session_data)
+                print(f"Running QA check '{func_name}'")
+                check_failed = qa_func(session_data, sessions_df)
                 if check_failed:
                     warnings.warn(f"Quality Assurance check '{func_name}' failed")
                     return True
@@ -51,7 +54,8 @@ class QualityAC:
 
         return False
 
-    def quality_control_check(self, session_data: pl.DataFrame) -> Optional[bool]:
+
+    def quality_control_check(self, session_data: pl.DataFrame, sessions_df: pl.DataFrame) -> Optional[bool]:
         """
         Run all configured quality control checks on the session data.
         Returns:
@@ -64,7 +68,8 @@ class QualityAC:
 
         for func_name, qc_func in self.qc_funcs.items():
             try:
-                check_failed = qc_func(session_data)
+                print(f"Running QC check '{func_name}'")
+                check_failed = qc_func(session_data, sessions_df)
                 if check_failed:
                     warnings.warn(f"Quality Control check '{func_name}' failed")
                     return True

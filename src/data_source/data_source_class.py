@@ -19,17 +19,16 @@ class DataSource:
     def __init__(self, data_source_config):
         self.config = data_source_config
         assert (
-            self.config["functions"] is not None
-        ), "functions must be defined in data_source_config"
+            self.config["get_data_function"] is not None
+        ), "get_data_function must be defined in data_source_config"
         assert (
-            len(self.config["functions"]) == 1
+            len(self.config["get_data_function"]) == 1
         ), "Only one get_data function is supported"
-        self.func_name = list(self.config["functions"].keys())[0]
-        self._get_data_task = load_funcs(self.config["functions"], "data_source")
-        self._get_data = self._get_data_task[self.func_name]
+        self.func_name = list(self.config["get_data_function"].keys())[0]
+        self._get_data = load_funcs(self.config["get_data_function"], "data_source", return_type="handle")
 
     def get_data(self, trial: pl.DataFrame) -> pl.DataFrame:
         result = self._get_data(trial)
-        if not isinstance(result, pl.DataFrame):
-            warnings.warn(f"Expected polars DataFrame but got {type(result)}")
+        if not isinstance(result, pl.DataFrame | dict):
+            warnings.warn(f"Expected polars DataFrame or dict but got {type(result)}")
         return result

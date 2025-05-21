@@ -1,124 +1,56 @@
-from ax.storage.sqa_store.db import get_engine, create_all_tables
-from ax.storage.sqa_store.db import init_engine_and_session_factory
-from ax.storage.sqa_store.structs import DBSettings
-from ax.service.ax_client import AxClient
+from ax.service.utils.instantiation import FixedFeatures
 from src.utils import load_funcs
-from pathlib import Path
-import warnings
-from typing import Dict, Any, Optional
-
+from typing import Dict, Any
+import plotly.graph_objects as go
+import copy
+from ax.plot.render import plot_config_to_html
 
 class ExperimentTracker:
+    """
+    Class for tracking the experiment context via an Ax client. Usually one experiment per participant.
+    """
     def __init__(self, config: Dict[str, Any]):
-        self.config = config
-        self.experiment_id_column = config.get("experiment_id_column", "experiment_id")
-        
-        # Base directory for all experiments
-        self.base_dir = Path(config["paths"]["base_dir"])
-        self.experiment_name = config["experiment"]["name"]
-        
-        # Store current context
-        self.current_participant_id = None
-        self.current_experiment_id = None
-        self.ax_client = None
-        self.current_trial_index = None  # Add this to track current trial
-        self.current_parameters = None   # Add this to track current parameters
+        self._update_ax_client_function = load_funcs(config["update_ax_client_function"], "experiment_tracker", return_type="handle")
+        self.current_participant = None
+        self._ax_client = None
+        self.first_trial_init_function = load_funcs(config["first_trial_init_function"], "experiment_tracker", return_type="handle")
+    
 
-        # Load optimizer functions
-        assert (
-            config.get("optimizer_functions") is not None
-        ), "optimizer_functions must be defined"
-        self._optimizer_funcs = load_funcs(config["optimizer_functions"], "bayes_opt")
-        self._complete_and_get_trial = self._optimizer_funcs["complete_and_get_trial"]
-        
-        # Load context update functions
-        assert (
-            config.get("context_update_functions") is not None
-        ), "context_update_functions must be defined"
-        self._context_funcs = load_funcs(config["context_update_functions"], "context_update")
-        self._update_context_internal = self._context_funcs[config["context_update_functions"]["function"]]
-
-        self.logger = get_run_logger()
-
-    def _get_participant_json_path(self, participant_id: str) -> Path:
-        """Get the JSON file path for a specific participant."""
-        return self.base_dir / participant_id / f"{self.experiment_name}.json"
-
-    def update_context(self, participant: Dict[str, Any], experiment_id: str) -> None:
+    def update_ax_client(self, participant: str) -> Dict[str, Any]:
         """
-        Public method to update experimental context.
-        Calls the configured context update function.
-        """
-        self._update_context_internal(self, participant, experiment_id)
-
-    def _default_update_context(self, participant: Dict[str, Any], experiment_id: str) -> None:
-        """Default implementation of context update."""
-        participant_id = participant[self.experiment_id_column]
+        Update the experiment context based on the evaluation result.
         
-        # If we're already working with this participant, no need to reload
-        if participant_id == self.current_participant_id:
-            return
+        Parameters
+        ----------  
+        participant : str
+            The participant ID
             
-        # Update current context
-        self.current_participant_id = participant_id
-        self.current_experiment_id = experiment_id
-        
-        # Load participant-specific Ax client
-        self.ax_client = self._load_ax_client(participant_id)
-
-    def _load_ax_client(self, participant_id: str) -> AxClient:
-        """Load Ax client from JSON or database for a specific participant."""
-        if self.config["experiment"].get("use_database", False):
-            db_path = self.base_dir / participant_id / f"{self.experiment_name}.db"
-            if not db_path.exists():
-                raise FileNotFoundError(
-                    f"Database not found at {db_path}. "
-                    "Please initialize experiment using initialize_experiment.py"
-                )
-            return AxClient(db_settings=DBSettings(url=f"sqlite:///{db_path}"))
-        else:
-            json_path = self._get_participant_json_path(participant_id)
-            if not json_path.exists():
-                raise FileNotFoundError(
-                    f"JSON file not found at {json_path}. "
-                    "Please initialize experiment using initialize_experiment.py"
-                )
-            return AxClient.load_from_json_file(filepath=str(json_path))
-
-    def save_current_state(self) -> None:
-        """Save the current state of the Ax client."""
-        if self.ax_client is not None and self.current_participant_id is not None:
-            json_path = self._get_participant_json_path(self.current_participant_id)
-            json_path.parent.mkdir(parents=True, exist_ok=True)
-            self.ax_client.save_to_json_file(filepath=str(json_path))
-
-    def get_next_trial(self) -> Dict[str, Any]:
-        """
-        Get parameters for the next trial.
-        
         Returns
         -------
         Dict[str, Any]
-            Dictionary containing 'parameters' and 'trial_index'
+            Dictionary containing the updated context
         """
-        if self.ax_client is None:
-            raise RuntimeError("No active Ax client. Call update_context first.")
-        
-        parameters, trial_index = self.ax_client.get_next_trial()
-        
-        # Store current trial info
-        self.current_trial_index = trial_index
-        self.current_parameters = parameters
-        
-        # Save state after getting new trial
-        self.save_current_state()
-        
-        return {
-            "parameters": parameters,
-            "trial_index": trial_index
-        }
+        self.current_participant = participant
+        self._ax_client, self._ax_client_path = self._update_ax_client_function(participant)
 
-    def update_optimizer(self, evaluation_result: Dict[str, float]) -> Dict[str, Any]:
+
+    def get_trial_index(self) -> int:
+        """
+        Get the index of the current trial
+        """
+        putative_index = len(self._ax_client.experiment.trials) - 1
+        if self._ax_client.experiment.trials[putative_index].status.is_running:
+            return putative_index
+        elif len(self._ax_client.experiment.running_trial_indices) > 0:
+            print(f"Trial {putative_index} is not running, trying {self._ax_client.experiment.running_trial_indices[0]}")
+            putative_index = self._ax_client.experiment.running_trial_indices[0]
+            return putative_index
+        else:
+            print(f"Trial {putative_index} is also not running, forcing new trial {putative_index + 1}")
+            return putative_index + 1
+    
+
+    def update_experiment(self, evaluation_result: Dict[str, float]) -> Dict[str, Any]:
         """
         Complete current trial with results and get parameters for next trial.
         
@@ -129,25 +61,73 @@ class ExperimentTracker:
             
         Returns
         -------
-        Dict[str, Any]
-            Dictionary containing parameters for next trial
         """
-        if self.ax_client is None:
+        if self._ax_client is None:
             raise RuntimeError("No active Ax client. Call update_context first.")
         
-        if self.current_trial_index is None:
-            raise RuntimeError("No active trial. Call get_next_trial first.")
+        if len(self._ax_client.generation_strategy.experiment.trials) == 0:
+            parameters = self.first_trial_init_function(self.current_participant)
+            fixed_features = FixedFeatures(parameters=parameters)
+            parameterization, trial_index = self._ax_client.get_next_trial(fixed_features=fixed_features)
+            self.current_trial_index = trial_index
+        else:
+            self.current_trial_index = self.get_trial_index()
+
+            
         
         # Complete the current trial
-        self.ax_client.complete_trial(
+        self._ax_client.complete_trial(
             trial_index=self.current_trial_index,
             raw_data=evaluation_result
         )
+    
+
+    def get_next_trial(self) -> Dict[str, Any]:
+        """
+        Get parameters for next trial
+        """
+        # Get parameters for next trial
+        parameters, trial_index = self._ax_client.get_next_trial()
         
-        # Save state after completing trial
-        self.save_current_state()
+        return {
+            "parameters": parameters,
+            "trial_index": trial_index
+        }
+    
+
+    def get_contour_plot(self) -> go.Figure:
+        """
+        Get the contour plot of the experiment
+        """
+        return self._ax_client.get_contour_plot()
+    
+
+    def save_experiment_to_json(self) -> None:
+        """
+        Save the experiment to a file
+        """
+        self._ax_client.save_to_json_file(filepath=self._ax_client_path)
+    
+    
+    def save_experiment_to_json_file(self, filepath: str) -> None:
+        """
+        Save the experiment to a file
+        """
+        self._ax_client.save_to_json_file(filepath=filepath)
+
+
+    def get_contour_plot_safe(self) -> "go.Figure":
+        """
+        Get the contour plot of the experiment by deep copying the Ax client and
+        triggering model fitting on the copy. This does NOT affect the real experiment.
+        """
+        if self._ax_client is None:
+            raise RuntimeError("No active Ax client. Call update_context first.")
+
+        viz_ax_client = copy.deepcopy(self._ax_client)
+        viz_ax_client.get_next_trial()  # Triggers GP fit on the copy
+        # Convert to plotly figure and return
+        return go.Figure(viz_ax_client.get_contour_plot().data)
         
-        # Get parameters for next trial (this also saves state)
-        next_trial = self.get_next_trial()
-        
-        return next_trial
+    
+    

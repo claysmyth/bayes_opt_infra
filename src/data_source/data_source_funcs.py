@@ -2,7 +2,7 @@ import polars as pl
 import os
 
 
-def get_bilateral_rcs_data(session: pl.DataFrame, file_name: str = 'raw_data.parquet') -> dict:
+def get_bilateral_rcs_data(sessions: pl.DataFrame, file_name: str = 'raw_data.parquet') -> dict:
     """
     Get data from the Bilateral ARCS data source.
     
@@ -10,16 +10,16 @@ def get_bilateral_rcs_data(session: pl.DataFrame, file_name: str = 'raw_data.par
     the corresponding side's data from the parquet file.
     """
     # Get unique session report paths
-    unique_sessions = session.select('session_report_path', 'Side').unique()
+    unique_sessions = sessions.select('session_report_path', 'Side').unique()
     
     # Check that we have exactly two sides (Left and Right)
-    if unique_sessions.height >= 2:
-        raise ValueError(f"Expected at most 2 unique sides (Left and Right), but found {unique_sessions.height}")
+    if unique_sessions.height > 2:
+        raise ValueError(f"Expected at most 2 unique sessions, but found {unique_sessions.height}")
     
     # Verify we have both Left and Right sides
     sides = unique_sessions['Side'].to_list()
-    if 'Left' not in sides or 'Right' not in sides:
-        raise ValueError(f"Missing required sides. Found: {sides}, need both 'Left' and 'Right'")
+    if 'Left' not in sides and 'Right' not in sides:
+        raise ValueError(f"Missing required sides. Found: {sides}, need at least one 'Left' or one 'Right'")
     
     # Create dictionary with data for each side
     result = {}

@@ -1,34 +1,23 @@
 from typing import Dict, Any
+from ax.service.ax_client import AxClient
+import json
 
-def default_context_update(
-    experiment_tracker,
-    participant: Dict[str, Any],
-    experiment_id: str
-) -> None:
+def get_rcs_sleep_aDBS_ax_client(participant: str, experiment: str, base_dir_template: str) -> None:
     """
-    Default implementation of context update.
-    Updates participant context and loads appropriate Ax client.
+    Get the Ax client for the RCS Sleep aDBS experiment.
     """
-    experiment_tracker._default_update_context(participant, experiment_id)
+    filepath = base_dir_template.format(participant=participant, experiment=experiment)
+    return (
+        AxClient.load_from_json_file(filepath=filepath), 
+        filepath
+    )
 
-def bilateral_context_update(
-    experiment_tracker,
-    participant: Dict[str, Any],
-    experiment_id: str
-) -> None:
+
+def get_rcs_sleep_aDBS_ax_client_first_trial_parameters(participant: str, base_init_params_filepath: str) -> None:
     """
-    Bilateral-specific context update.
-    Handles both left and right devices for a participant.
+    Get the Ax client for the RCS Sleep aDBS experiment.
     """
-    participant_id = participant[experiment_tracker.experiment_id_column].split('_')[0]  # e.g., 'RCS09' from 'RCS09_L'
+    with open(base_init_params_filepath.format(participant=participant), "r") as f:
+        init_params = json.load(f)
     
-    # If we're already working with this participant, no need to reload
-    if participant_id == experiment_tracker.current_participant_id:
-        return
-        
-    # Update current context
-    experiment_tracker.current_participant_id = participant_id
-    experiment_tracker.current_experiment_id = experiment_id
-    
-    # Load participant-specific Ax client
-    experiment_tracker.ax_client = experiment_tracker._load_ax_client(participant_id)
+    return init_params
