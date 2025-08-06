@@ -390,10 +390,10 @@ def plot_adaptive_state_and_amplitude(
     Plot adaptive state and amplitude data over time using matplotlib.
     """
     # Extract session number and filter session_info
-    session_number = df.get_column("SessionNumber").unique().first()
-    session_info = session_info.filter(pl.col("Session#").str.contains(session_number))
-    participant = session_info.get_column("RCS#").unique().item()
-    device = session_info.get_column("Device").unique().item()
+    session_number = df.filter(pl.col("SessionNumber").is_not_null()).get_column("SessionNumber").unique().first()
+    session_info_filtered = session_info.filter(pl.col("Session#").str.contains(session_number)) # Assumes that sessions corresponding to the same unit of analysis are aggregated in filepath.
+    participant = session_info_filtered.get_column("RCS#").unique().item()
+    device = session_info_filtered.get_column("Device").unique().item()
 
     # Load the NREM state mapping from the provided path
     with open(Path(nrem_state_base_path.format(

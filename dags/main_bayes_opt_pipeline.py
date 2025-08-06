@@ -121,7 +121,7 @@ def bayes_opt_main_pipeline(cfg: DictConfig):
             # Needs to be called before experiment_tracker.update_experiment(), so that currently running trial can be captured.
             reporter.update_for_current_participant(participant_sessions, experiment_tracker)
 
-            # Update Bayesian Optimizer with results and get next parameters
+            # Update Bayesian Optimizer with results and get next parameters. Note update experiment does not call next trial.
             experiment_tracker.update_experiment(result)
 
             # Saving plots, tables, current parameter caches, etc...

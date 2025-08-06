@@ -156,7 +156,7 @@ def calculate_bilateral_reward_and_sem(
             hemisphere_stats["Right"]["zscored_time_in_nrem"]
         ) / 2
         
-        # Apply (1-sigmoid)**(1/5) transformation to the zscored time average
+        # Apply (1-sigmoid)**(1/2) transformation to the zscored time average
         # This will act as a surrogate for Standard Error around the observation of average delta power
         sem = (1 - 1/(1 + np.exp(-avg_zscored_time)))**(1/2)
         

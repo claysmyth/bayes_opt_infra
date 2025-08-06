@@ -107,7 +107,7 @@ class Reporter:
         
         # Add session and device info to config
         wandb_config["tags"] = session_info.get_column("Session#").unique().to_list()
-        wandb_config["job_type"] = session_info.get_column("Device").unique().to_list()[0]
+        wandb_config["job_type"] = session_info.get_column("RCS#").unique().to_list()[0]
         wandb_config["group"] = session_info.get_column("SessionType(s)").unique().to_list()[0]
         
         # Initialize wandb

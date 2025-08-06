@@ -42,8 +42,8 @@ class ExperimentTracker:
         if self._ax_client.experiment.trials[putative_index].status.is_running:
             return putative_index
         elif len(self._ax_client.experiment.running_trial_indices) > 0:
-            print(f"Trial {putative_index} is not running, trying {self._ax_client.experiment.running_trial_indices[0]}")
-            putative_index = self._ax_client.experiment.running_trial_indices[0]
+            print(f"Trial {putative_index} is not running, assigning to trial {list(self._ax_client.experiment.running_trial_indices)[0]}")
+            putative_index = list(self._ax_client.experiment.running_trial_indices)[0]
             return putative_index
         else:
             print(f"Trial {putative_index} is also not running, forcing new trial {putative_index + 1}")
@@ -130,4 +130,17 @@ class ExperimentTracker:
         return go.Figure(viz_ax_client.get_contour_plot().data)
         
     
+    def attach_trial(self, parameters: Dict[str, float]) -> None:
+        """
+        Attach a trial to the experiment
+        """
+        params, trial_index = self._ax_client.attach_trial(parameters)
+        return trial_index
+    
+    
+    def complete_trial(self, trial_index: int, result: Dict[str, float]) -> None:
+        """
+        Complete a trial with results
+        """
+        self._ax_client.complete_trial(trial_index=trial_index, raw_data=result)
     

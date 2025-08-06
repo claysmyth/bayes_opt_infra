@@ -1,6 +1,7 @@
 import polars as pl
 import json
 import re
+from pathlib import Path
 
 
 def check_stim_settings(data: pl.DataFrame, expected_amplitude: float = 1.0) -> bool:
@@ -162,6 +163,28 @@ def check_rcs_adaptive_settings(_: pl.DataFrame, sessions_df: pl.DataFrame, **co
                     return True
         
     return False  # All checks pass
+
+
+def check_if_both_sides_are_present(_: pl.DataFrame, sessions_df: pl.DataFrame, **config: dict) -> bool:
+    """
+    Check if all sides in the current_target_amps_path are present in the sessions_df.
+    Returns True if any side is missing, False if all are present.
+    """
+
+    participant = sessions_df["RCS#"].unique()[0]
+    # Read the current_target_amps_path file
+    with open(Path(config['current_target_amps_path'].format(participant=participant)), 'r') as f:
+        target_amps = json.load(f)
+    
+    # Get the set of sides present in sessions_df
+    sides_present = set(sessions_df.get_column('Side').to_list())
+    
+    # Check for each key in target_amps
+    for side in target_amps.keys():
+        if side not in sides_present:
+            return True  # Missing side found
+    
+    return False  # All sides are present
 
 
 def get_nested_value(d: dict, path: str) -> any:

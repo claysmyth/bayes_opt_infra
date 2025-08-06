@@ -35,7 +35,10 @@ def log_plotting_result(result, func_name, log_options, wandb_run=None, path=Non
 
     log_options = [option.lower() for option in log_options]
 
-    logger = get_run_logger()
+    try:
+        logger = get_run_logger()
+    except:
+        logger = None
 
     logging_actions = {
         altair.Chart: _log_html_plot,
@@ -57,7 +60,10 @@ def log_plotting_result(result, func_name, log_options, wandb_run=None, path=Non
     if isinstance(result, str) and (result.startswith("<!DOCTYPE html>") or result.startswith("<div")):
         _log_html_string(result, func_name, log_options, wandb_run, path)
     else:
-        logger.warning(f"Unsupported result type for {func_name}: {type(result)}")
+        if logger:
+            logger.warning(f"Unsupported result type for {func_name}: {type(result)}")
+        else:
+            print(f"Unsupported result type for {func_name}: {type(result)}")
 
 
 # Helper functions for logging different types of results
