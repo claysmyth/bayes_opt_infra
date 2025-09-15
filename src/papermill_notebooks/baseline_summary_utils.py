@@ -91,13 +91,15 @@ def get_model(device_id, model_path, model_group):
     return pickle.load(open(glob.glob(model_path.format(device_id=device_id, model_group=model_group))[0], "rb"))
 
 
-def add_state_predictions(df, linear_model):
+def add_state_predictions(df, linear_model, feature_columns=['^Power_Band.*[5-8]$']):
     return df.with_columns(
-        pl.Series(name='State', values=linear_model.classifier_model.predict(df.select('^Power_Band.*[5-8]$').to_numpy()))
+        pl.Series(name='State', values=linear_model.classifier_model.predict(df.select(feature_columns).to_numpy()))
     ).with_columns(
         pl.when(pl.col('State') == 0).then(pl.lit('Wake+REM')).otherwise(pl.lit('NREM')).alias('Adaptive_CurrentAdaptiveState_mapped'),
         # pl.lit(1).alias('Adaptive_CurrentProgramAmplitudesInMilliamps_1') # Give dummy amplitude to calculate reward
     )
+
+
 
 def extrapolate_column(
     df: pl.DataFrame, 
@@ -304,3 +306,150 @@ def plot_nights_power_band(
     plt.tight_layout(rect=[0, 0, 1, 0.97])
     
     return fig
+
+
+def plot_nights_state_predictions(
+    nights: list[pl.DataFrame], 
+    state_column: str = 'Adaptive_CurrentAdaptiveState_mapped', 
+    title_col: str = 'SessionNumber',
+    max_x_axis: int = 40_000
+) -> plt.Figure:
+    """
+    Plot state predictions for each DataFrame in nights list, with time since recording start on x-axis.
+    
+    Parameters
+    ----------
+    nights : list[pl.DataFrame]
+        List of DataFrames containing state predictions and localTime columns
+    state_column : str, optional
+        Name of the state column to plot, by default 'Adaptive_CurrentAdaptiveState_mapped'
+    title_col : str, optional
+        Name of the column to use for subplot titles, by default 'SessionNumber'
+    max_x_axis : int, optional
+        Maximum x-axis value in seconds, by default 40_000
+    
+    Returns
+    -------
+    plt.Figure
+        The figure object that can be saved to a file
+    """
+    
+    # Create figure with one subplot per night
+    num_nights = len(nights)
+    fig, axes = plt.subplots(num_nights, 1, figsize=(12, 3*num_nights))
+    if num_nights == 1:
+        axes = [axes]  # Ensure axes is always a list
+    
+    # Find global max time for consistent x-axis
+    max_time = 0
+    for df in nights:
+        if len(df) > 0:
+            first_timestamp = df['localTime'].min()
+            df = df.with_columns(
+                (pl.col('localTime') - first_timestamp).dt.total_seconds().alias('Time_Since_Start_Seconds')
+            )
+            max_time = max(max_time, df['Time_Since_Start_Seconds'].max())
+    
+    # Plot each night
+    for i, df in enumerate(nights):
+        if len(df) > 0:
+            # Calculate time since start
+            first_timestamp = df['localTime'].min()
+            df = df.with_columns(
+                (pl.col('localTime') - first_timestamp).dt.total_seconds().alias('Time_Since_Start_Seconds')
+            )
+            
+            # Convert to pandas for easier plotting
+            title_value = df.select(title_col).filter(pl.col(title_col).is_not_null()).unique().get_column(title_col).to_list()
+            df_pd = df.to_pandas()
+            
+            # Create state mapping for plotting
+            state_mapping = {'Wake+REM': 0, 'NREM': 1}
+            df_pd['State_Numeric'] = df_pd[state_column].map(state_mapping)
+            
+            # Plot state predictions as a step function
+            axes[i].step(
+                df_pd['Time_Since_Start_Seconds'],
+                df_pd['State_Numeric'],
+                where='post',
+                label=state_column,
+                color='blue',
+                linewidth=2
+            )
+            
+            # Add horizontal lines for each state
+            axes[i].axhline(y=0, color='lightblue', linestyle='-', alpha=0.3, label='Wake+REM')
+            axes[i].axhline(y=1, color='darkblue', linestyle='-', alpha=0.3, label='NREM')
+            
+            # Calculate state statistics
+            state_counts = df_pd[state_column].value_counts()
+            total_samples = len(df_pd)
+            
+            # Add text box with state statistics
+            stats_text = f"Wake+REM: {state_counts.get('Wake+REM', 0)} ({state_counts.get('Wake+REM', 0)/total_samples*100:.1f}%)\n"
+            stats_text += f"NREM: {state_counts.get('NREM', 0)} ({state_counts.get('NREM', 0)/total_samples*100:.1f}%)"
+            
+            axes[i].text(0.02, 0.98, stats_text, transform=axes[i].transAxes, 
+                        verticalalignment='top', bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.8))
+            
+            # Set plot properties
+            axes[i].set_title(title_value)
+            axes[i].set_ylabel('Sleep State')
+            axes[i].set_ylim(-0.1, 1.1)
+            axes[i].set_yticks([0, 1])
+            axes[i].set_yticklabels(['Wake+REM', 'NREM'])
+            axes[i].grid(True, linestyle='--', alpha=0.4)
+            axes[i].set_xlim(0, max_x_axis)
+            axes[i].legend(loc='upper right')
+    
+    # Set common x-axis label
+    for ax in axes:
+        ax.set_xlabel('Time Since Recording Start (seconds)')
+    
+    # Add overall title
+    fig.suptitle(f'State Predictions Over Time for Each Night', fontsize=16)
+    
+    # Adjust layout
+    plt.tight_layout(rect=[0, 0, 1, 0.97])
+    
+    return fig
+
+def find_binary_pattern_match(df: pl.DataFrame, column: str, window: list | np.ndarray, 
+                             match_threshold: float = 1.0) -> tuple[int, pl.DataFrame]:
+    """
+    Optimized version specifically for binary vectors.
+    Uses Hamming similarity (fraction of matching bits).
+    
+    Parameters:
+    -----------
+    df : pl.DataFrame
+        Input dataframe
+    column : str
+        Column name with binary values
+    window : list | np.ndarray
+        Binary pattern to match
+    match_threshold : float
+        Fraction of bits that must match (1.0 = exact match)
+    
+    Returns:
+    --------
+    tuple[int, pl.DataFrame] : (first_matching_index, original_dataframe)
+    """
+    
+    window_size = len(window)
+    window = np.array(window, dtype=np.int8)
+    
+    col_values = df.get_column(column).to_numpy(zero_copy_only=False).astype(np.int8)
+    
+    if len(col_values) < window_size:
+        return (-1, df)
+    
+    # For binary vectors, check fraction of matching elements
+    for i in range(len(col_values) - window_size + 1):
+        segment = col_values[i:i+window_size]
+        
+        # Hamming similarity: fraction of matching bits
+        matches = np.sum(segment == window) / window_size
+        
+        if matches >= match_threshold:
+            return i

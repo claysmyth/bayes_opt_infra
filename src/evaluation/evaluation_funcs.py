@@ -6,6 +6,64 @@ import bidict
 import numpy as np
 from prefect import task
 
+
+def find_binary_pattern_match(df: pl.DataFrame, column: str = None, value_to_match: str = None, window_length: int = None, 
+                             match_threshold: float = 1.0) -> tuple[int, pl.DataFrame]:
+    """
+    Optimized version specifically for binary vectors that finds the first occurrence of a pattern match.
+    Uses Hamming similarity (fraction of matching bits) to identify matches.
+    
+    The function works by:
+    1. Converting a string column to binary values (1 for value_to_match, 0 for others)
+    2. Creating a window of ones of specified length to match against
+    3. Sliding this window along the binary values one position at a time
+    4. For each position, calculating what fraction of bits match between the window and data
+    5. Returning the first position where the match fraction exceeds the threshold
+
+    The value to match is device determined NREM state. So this will find the first occurence where NREM states exceeds a threshold, given a specific window length and correlation threshold.
+    
+    Parameters:
+    -----------
+    df : pl.DataFrame
+        Input dataframe
+    column : str
+        Column name with string values that will be converted to binary
+    value_to_match : str
+        String value to match (converted to 1, all others to 0)
+    window_length : int
+        Length of the window pattern to match
+    match_threshold : float
+        Fraction of bits that must match (1.0 = exact match)
+    
+    Returns:
+    --------
+    tuple[int, pl.DataFrame] : (first_matching_index, original_dataframe)
+        first_matching_index: Index of first match found, or -1 if no match
+        original_dataframe: The input dataframe unchanged
+    """
+    
+    window = np.ones(window_length)
+
+    
+    # Convert string column to binary: value_to_match becomes 1, all others become 0
+    col_values = df.get_column(column).to_numpy(zero_copy_only=False)
+    binary_values = (col_values == value_to_match).astype(np.int8)
+    
+    if len(binary_values) < window_length:
+        return (-1, df)
+    
+    # For binary vectors, check fraction of matching elements
+    for i in range(len(binary_values) - window_length + 1):
+        segment = binary_values[i:i+window_length]
+        
+        # Hamming similarity: fraction of matching bits
+        matches = np.sum(segment == window) / window_length
+        
+        if matches >= match_threshold:
+            return i
+    
+    return -1
+
 def add_running_average(df: pl.DataFrame, column_name: str) -> pl.DataFrame:
     return df.with_row_index(offset=1).with_columns(
         (pl.col(column_name).cum_sum() / pl.col('index')).alias(f'{column_name}_running_average')
@@ -19,6 +77,7 @@ def calculate_bilateral_reward_and_sem(
     current_target_amps_path: str,
     baseline_running_stats_path: str,
     baseline_rec_lengths_stats_path: str,
+    pattern_match_config_path: str, # This is used to find the first NREM state in the data.
     SECONDS_PER_SAMPLE: float
 ) -> Dict[str, float]:
     """
@@ -48,10 +107,12 @@ def calculate_bilateral_reward_and_sem(
     )), 'r') as f:
         current_target_amps = json.load(f)
 
+    sides = list(current_target_amps.keys())
+
     # Calculate time in NREM and average delta power for each hemisphere
     hemisphere_stats = {}
-    for side in ["Left", "Right"]:
-        device = participant + side[0]
+    for side in sides:
+        device = participant + side[0] # only take L or R
 
         # Load the NREM state mapping from the provided path
         with open(Path(nrem_state_base_path.format(
@@ -71,9 +132,24 @@ def calculate_bilateral_reward_and_sem(
             device=device
         ))
 
-        
+        # Load the pattern match config from the provided path. This is used to find the first NREM state in the data.
+        with open(pattern_match_config_path.format(
+            participant=participant,
+            device=device
+        ), 'r') as f:
+            pattern_match_config = json.load(f)
+
+        window_length = pattern_match_config["window_length"]
+        corr_threshold = pattern_match_config["correlation_threshold"]
+        first_n_of_each_session_to_drop_in_fft_intervals = pattern_match_config["first_n_of_each_session_to_drop"]
         
         data = session_data_dict[side]
+
+        # Drop beginning of each session to avoid artifacts.
+        if first_n_of_each_session_to_drop_in_fft_intervals > 0:
+            # n is in units of FFT intervals. So need get row number that corresponds. 5m samples at 500Hz is the first ~3 minutes of data... probably enough to get past the first artifact.
+            row_index_to_slice_at = data.head(5_000_000).with_row_index().filter(pl.col('Power_Band5').is_not_null()).get_column('index').first()
+            data = data.slice(row_index_to_slice_at, None)
 
         # Get data in NREM state
         nrem_delta_power = data.filter(
@@ -84,7 +160,8 @@ def calculate_bilateral_reward_and_sem(
         # Select the columns of interest
         ).select(
             pl.col('localTime'),
-            pl.col("Adaptive_Ld0_featureInputs").list.get(0)
+            pl.col("Adaptive_Ld0_featureInputs").list.get(0),
+            pl.col("Adaptive_CurrentAdaptiveState")
         # Filter out duplicate values of first Ld0. Each FFT cycle prints out identical values until a new updateRate cycle is reached.
         ).filter(
             pl.col("Adaptive_Ld0_featureInputs").diff().abs() != 0
@@ -97,6 +174,22 @@ def calculate_bilateral_reward_and_sem(
             print(f"No NREM data found for {participant} {side}")
             print(f"Target amps: {current_target_amps[side]}... may be incorrect for this Session")
             continue
+
+
+        inferred_first_n_after_filtering_for_NREM = find_binary_pattern_match(
+            nrem_delta_power, 
+            'Adaptive_CurrentAdaptiveState', 
+            value_to_match=nrem_state_mapping["NREM"], 
+            window_length=window_length, 
+            match_threshold=corr_threshold
+        )
+        if inferred_first_n_after_filtering_for_NREM == -1:
+            print(f"NREM correlation threshold failed for {participant} {side}...")
+            print(f"Target amps: {current_target_amps[side]}... may be incorrect for this Session")
+            continue
+        else:
+            nrem_delta_power = nrem_delta_power.slice(inferred_first_n_after_filtering_for_NREM, None)
+
 
         nrem_delta_power = add_running_average(nrem_delta_power, "Adaptive_Ld0_featureInputs")
 
@@ -133,12 +226,13 @@ def calculate_bilateral_reward_and_sem(
             "zscored_delta": zscored_nrem_running_delta_avg
         }
     
-    # Calculate total time in NREM across hemispheres
-    total_nrem_time = (hemisphere_stats["Left"]["time_in_nrem"] + 
-                      hemisphere_stats["Right"]["time_in_nrem"])
     
     # Calculate time-weighted reward
     if "Left" in hemisphere_stats and "Right" in hemisphere_stats:
+        # Calculate total time in NREM across hemispheres
+        total_nrem_time = (hemisphere_stats["Left"]["time_in_nrem"] + 
+                      hemisphere_stats["Right"]["time_in_nrem"])
+        
         # Calculate time-weighted delta reward
         if total_nrem_time > 0:  # Avoid division by zero
             delta_reward = (
